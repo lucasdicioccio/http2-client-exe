@@ -199,7 +199,7 @@ client QueryArgs{..} = do
                 in frameClient {
                        _sendFrames = \mkFrames -> do
                            xs <- mkFrames
-                           print $ (">>> "::String, _getStreamId frameClient, map snd xs)
+                           print $ (">>> "::String, _getStreamId frameClient, [ (fhF 0, frame) | (fhF,frame) <- xs])
                            _sendFrames frameClient (pure xs)
                    }
           , _serverStream =

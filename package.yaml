@@ -1,5 +1,5 @@
 name:                http2-client-exe
-version:             0.1.0.0
+version:             0.1.0.1
 github:              "lucasdicioccio/http2-client-exe"
 license:             BSD3
 author:              "Lucas DiCioccio"
@@ -11,8 +11,8 @@ extra-source-files:
 - ChangeLog.md
 
 # Metadata used when publishing your package
-# synopsis:            Short description of your package
-# category:            Web
+synopsis:            A command-line http2 client.
+category:            Web
 
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
