@@ -2,9 +2,10 @@
 {-# LANGUAGE RecordWildCards   #-}
 module Main where
 
-import           Control.Concurrent (forkIO, myThreadId, throwTo, threadDelay)
-import           Control.Concurrent.Async (async, waitAnyCancel)
+import           Control.Concurrent.Lifted (fork, myThreadId, throwTo, threadDelay)
+import           Control.Concurrent.Async.Lifted (async, waitAnyCancel)
 import           Control.Monad (forever, when, void)
+import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as ByteString
 import           Data.Default.Class (def)
@@ -123,16 +124,17 @@ clientArgs =
     useTLS = flag UseTLS PlainText (long "plain-text")
 
 main :: IO ()
-main = execParser opts >>= client
+main = void $ do
+    hSetBuffering stdout LineBuffering
+    execParser opts >>= client >>= either print pure
   where
     opts = info (helper <*> clientArgs) (mconcat [
         fullDesc
       , header "http2-client-exe: a CLI HTTP2 client written in Haskell"
       ])
 
-client :: QueryArgs -> IO ()
-client QueryArgs{..} = do
-    hSetBuffering stdout LineBuffering
+client :: QueryArgs -> IO (Either ClientError ())
+client QueryArgs{..} = runClientIO $ do
 
     -- If we need to post data then we prepare an upload function.
     -- Otherwise the function does nothing but we tell the server that we are
@@ -144,7 +146,7 @@ client QueryArgs{..} = do
         ([], (Just (PostBytestring dataPayload))) ->
             return $ (id, upload dataPayload HTTP2.setEndStream)
         ([], (Just (PostFileContent filepath)))   -> do
-            dataPayload <- ByteString.readFile filepath
+            dataPayload <- liftIO $ ByteString.readFile filepath
             return $ (id, upload dataPayload HTTP2.setEndStream)
         ([], Nothing) ->
             return $ (HTTP2.setEndStream, \_ _ _ _ -> return ())
@@ -154,7 +156,7 @@ client QueryArgs{..} = do
                 trailers s _extraTrailers HTTP2.setEndStream
                 ))
         (_, (Just (PostFileContent filepath)))   -> do
-            dataPayload <- ByteString.readFile filepath
+            dataPayload <- liftIO $ ByteString.readFile filepath
             return $ (id, (\c ofc s sofc -> do
                 upload dataPayload id c ofc s sofc
                 trailers s _extraTrailers HTTP2.setEndStream
@@ -171,7 +173,7 @@ client QueryArgs{..} = do
                           ] <> _extraHeaders <> [("Trailer", ByteString.unwords $ fmap fst _extraTrailers)]
 
 
-    let ppHandler n idx _ stream ppHdrs streamFlowControl _ = void $ forkIO $ do
+    let ppHandler n idx _ stream ppHdrs streamFlowControl _ = void $ fork $ do
             let pushpath = fromMaybe "unspecified-path" (lookup ":path" ppHdrs)
             timePrint ("push stream started" :: String, pushpath)
             ret <- fromStreamResult <$> waitStream stream streamFlowControl (ppHandler n idx)
@@ -199,7 +201,7 @@ client QueryArgs{..} = do
                 in frameClient {
                        _sendFrames = \mkFrames -> do
                            xs <- mkFrames
-                           print $ (">>> "::String, _getStreamId frameClient, [ (fhF 0, frame) | (fhF,frame) <- xs])
+                           liftIO $ print $ (">>> "::String, _getStreamId frameClient, [ (fhF 0, frame) | (fhF,frame) <- xs])
                            _sendFrames frameClient (pure xs)
                    }
           , _serverStream =
@@ -209,7 +211,7 @@ client QueryArgs{..} = do
                 currentServerStrean {
                   _nextHeaderAndFrame = do
                       hdrFrame@(hdr,_) <- _nextHeaderAndFrame currentServerStrean
-                      print ("<<< "::String, HTTP2.streamId hdr, hdrFrame)
+                      liftIO $ print ("<<< "::String, HTTP2.streamId hdr, hdrFrame)
                       return hdrFrame
                 }
           }
@@ -221,13 +223,13 @@ client QueryArgs{..} = do
                 runHttp2Client frameConn _encoderBufsize _decoderBufsize conf (throwTo parentThread) ignoreFallbackHandler
 
     withConn $ \conn -> do
-      _addCredit (_incomingFlowControl conn) _initialWindowKick
-      _ <- forkIO $ forever $ do
+      liftIO $ _addCredit (_incomingFlowControl conn) _initialWindowKick
+      _ <- fork $ forever $ do
               updated <- _updateWindow $ _incomingFlowControl conn
               when updated $ timePrint ("sending flow-control update" :: String)
               threadDelay _interFlowControlUpdates
 
-      _ <- forkIO $ when (_interPingDelay > 0) $ forever $ do
+      _ <- fork $ when (_interPingDelay > 0) $ forever $ do
           threadDelay _interPingDelay
           (t0, t1, pingReply) <- ping conn _pingTimeout "pingpong"
           timePrint $ ("ping-reply:" :: String, pingReply, diffUTCTime t1 t0)
@@ -254,7 +256,6 @@ client QueryArgs{..} = do
 
       when (_finalDelay > 0) (threadDelay _finalDelay)
 
-
       _gtfo conn HTTP2.NoError _finalMessage
   where
     tlsParams = TLS.ClientParams {
@@ -271,28 +272,28 @@ client QueryArgs{..} = do
 
 data DumpType = MainFile | PushPromiseFile
 
-dump :: DumpType -> Path -> Int -> Int -> FilePath -> StreamResponse -> IO ()
+dump :: MonadIO m => DumpType -> Path -> Int -> Int -> FilePath -> StreamResponse -> m ()
 dump MainFile _ _ _ ":none" (hdrs, _, trls) = do
     timePrint hdrs
     timePrint trls
 dump MainFile _ _ _ ":stdout" (hdrs, body, trls) = do
     timePrint hdrs
-    ByteString.putStrLn body
+    liftIO $ ByteString.putStrLn body
     timePrint trls
 dump PushPromiseFile _ _ _ ":stdout" (hdrs, _, trls) = do
     timePrint hdrs
     timePrint trls
 dump MainFile _ _ _ ":stdout-pp" (hdrs, body, trls) = do
     timePrint hdrs
-    ByteString.putStrLn body
+    liftIO $ ByteString.putStrLn body
     timePrint trls
 dump PushPromiseFile _ _ _ ":stdout-pp" (hdrs, body, trls) = do
     timePrint hdrs
-    ByteString.putStrLn body
+    liftIO $ ByteString.putStrLn body
     timePrint trls
 dump _ querystring nquery nthread prefix (hdrs, body, trls) = do
     timePrint hdrs
-    ByteString.writeFile filepath body
+    liftIO $ ByteString.writeFile filepath body
     timePrint trls
   where
     filepath = mconcat [ prefix
@@ -305,8 +306,8 @@ dump _ querystring nquery nthread prefix (hdrs, body, trls) = do
     cleanPath = ByteString.takeWhile (/= '?')
               . ByteString.map (\c -> if c == '/' then '_' else c)
 
-timePrint :: Show a => a -> IO ()
-timePrint x = do
+timePrint :: (MonadIO m, Show a) => a -> m ()
+timePrint x = liftIO $ do
     tst <- getCurrentTime
     ByteString.hPutStrLn stderr $ ByteString.pack $ show (tst, x)
 

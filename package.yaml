@@ -26,6 +26,8 @@ dependencies:
 - data-default-class
 - http2
 - http2-client
+- lifted-async
+- lifted-base
 - optparse-applicative
 - time
 - tls
