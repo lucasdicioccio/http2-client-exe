@@ -173,10 +173,10 @@ client QueryArgs{..} = runClientIO $ do
                           ] <> _extraHeaders <> [("Trailer", ByteString.unwords $ fmap fst _extraTrailers)]
 
 
-    let ppHandler n idx _ stream ppHdrs streamFlowControl _ = void $ fork $ do
+    let ppHandler n idx conn _ stream ppHdrs streamFlowControl _ = void $ fork $ do
             let pushpath = fromMaybe "unspecified-path" (lookup ":path" ppHdrs)
             timePrint ("push stream started" :: String, pushpath)
-            ret <- fromStreamResult <$> waitStream stream streamFlowControl (ppHandler n idx)
+            ret <- fromStreamResult <$> waitStream conn stream streamFlowControl (ppHandler n idx conn)
             either (\e -> timePrint e) (dump PushPromiseFile pushpath n idx _downloadPrefix) ret
             timePrint ("push stream ended" :: String)
 
@@ -246,7 +246,7 @@ client QueryArgs{..} = runClientIO $ do
                                                    (_outgoingFlowControl conn)
                                                    stream
                                                    streamOUTFlowControl
-                              ret <-  fromStreamResult <$> waitStream stream streamINFlowControl (ppHandler n idx)
+                              ret <-  fromStreamResult <$> waitStream conn stream streamINFlowControl (ppHandler n idx conn)
                               either (\e -> timePrint e) (dump MainFile _path n idx _downloadPrefix) ret
                               timePrint $ "stream ended " <> show (idx, n)
                       in StreamDefinition initStream handler)
